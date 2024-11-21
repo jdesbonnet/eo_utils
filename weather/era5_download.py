@@ -34,7 +34,7 @@ def download_era5_data(output_file, parameters, bbox, start_date, end_date):
             #'format': 'netcdf',
             'format': 'grib',
 
-            #'area': bbox,  # North, West, South, East
+            'area': bbox,  # North, West, South, East
             'date': f"{start_date}/{end_date}",
             'time': [f"{hour:02d}:00" for hour in range(24)],  # All hours of the day
         },
@@ -44,10 +44,9 @@ def download_era5_data(output_file, parameters, bbox, start_date, end_date):
 
 # Example Usage
 if __name__ == "__main__":
-    output_file = "era5_data_2023-01.grib"
+    output_file = "era5_data_2023-01_try2.grib"
 
     parameters = ["2m_temperature", "total_precipitation"]
-    #parameters = ["geopotential"]
     bbox = (55, -10, 51, -6)  # Bounding box: North, West, South, East
     start_date = "2023-01-01"
     end_date = "2023-01-31"

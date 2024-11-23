@@ -121,7 +121,7 @@ def list_products (productDF, args) :
         size_MiB = feat['properties']['ContentLength'] / (1024*1024)
         safe_file_path = get_safe_file_path(product_name,args)
 
-        downloaded_checkmark = ""
+        downloaded_checkmark = "x"
         if os.path.exists(safe_file_path) :
             downloaded_checkmark = "✔"
 
@@ -138,7 +138,7 @@ def get_safe_file_path (product_name, args) :
     safe_parts = product_name.split('_')
     mgrs_tile = safe_parts[5]
     safe_path = f"{args.l2a_root}/{mgrs_tile}/{safe_file}"
-    return f"{args.l2a_root}/{mgrs_tile}/_downloading_{safe_file}"
+    return f"{args.l2a_root}/{mgrs_tile}/{safe_file}"
 
 
 
@@ -240,9 +240,9 @@ def download_products (productDF,args) :
             safe_parts = product_name.split('_')
             mgrs_tile = safe_parts[5]
             
-            if not mgrs_tile in tiles_of_interest :
-                print (f"only interested in {tiles_of_interest}, skipping {mgrs_tile}")
-                continue
+            #if not mgrs_tile in tiles_of_interest :
+            #    print (f"only interested in {tiles_of_interest}, skipping {mgrs_tile}")
+            #    continue
             	
             # If directory for the tile does not exist, create it 
             mgrs_tile_path = f"{args.l2a_root}/{mgrs_tile}"

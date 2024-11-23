@@ -67,26 +67,67 @@ def query_products (args) :
     if args.mgrs_tiles :
         tiles = args.mgrs_tiles.split(",")
         print (f"tiles={tiles}")
+        tile_sub_clauses = []
         for tile in tiles :
-            geographic_criteria +=  f"and Attributes/OData.CSC.StringAttribute/any(att:att/Name eq 'tileId' and att/OData.CSC.StringAttribute/Value eq '{tile}') "
+            #geographic_criteria += f"and Attributes/OData.CSC.StringAttribute/any(att:att/Name eq 'tileId' and att/OData.CSC.StringAttribute/Value eq '{tile}') "
+            # substringof does not appear to be supported: https://stackoverflow.com/questions/24994774/webapi-2-2-does-not-support-substringof-function
+            #geographic_criteria += f"and contains(Name,'{tile}') eq true "
+            tile_sub_clauses.append(f"contains(Name,'{tile}') eq true ")
+        print (f"tile_sub_clauses={tile_sub_clauses}")
+        tile_clause = " and (" + " or ".join(tile_sub_clauses) + ") "
+        print (f"tile_clause={tile_clause}")
+        geographic_criteria += tile_clause
+
  
     
     # OData API: https://documentation.dataspace.copernicus.eu/APIs/OData.html
+    # Older OData documentation: https://scihub.copernicus.eu/userguide/ODataAPI
     # List of Sentinel-2 query attributes: https://catalogue.dataspace.copernicus.eu/odata/v1/Attributes(SENTINEL-2)
     # TODO: can we work the MGRS tiles in this query?
     query_url = (f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?" 
-             f"$filter=Collection/Name eq 'SENTINEL-2' " 
-             f"and OData.CSC.Intersects(area=geography'SRID=4326;{args.bounding_box}') "
-             #f"{geographic_criteria}"
+             f"$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') eq true " 
+             #f"and OData.CSC.Intersects(area=geography'SRID=4326;{args.bounding_box}') "
+             f"{geographic_criteria}"
              f"and ContentDate/Start gt {args.begin_date}T00:00:00.000Z " 
              f"and ContentDate/Start lt {args.end_date}T00:00:00.000Z "
              f"and Attributes/OData.CSC.DoubleAttribute/any(att:att/Name eq 'cloudCover' and att/OData.CSC.DoubleAttribute/Value le {args.max_cloud})"
              f"&$count=True&$top=1000" )
-             
-    print (f"query_url={query_url}")
-    json_ = requests.get(query_url).json()  
-    print (f"json={json_}")
-    return pd.DataFrame.from_dict(json_["value"])
+
+    if args.debug == True :
+        print (f"query_url={query_url}")
+
+    json_ = requests.get(query_url).json()
+
+    if args.debug == True :
+        print (f"json={json_}")
+
+
+
+    #T TODO cut/paste from download_products
+    p = pd.DataFrame.from_dict(json_["value"])
+    p["geometry"] = p["GeoFootprint"].apply(shape)
+    productDF = gpd.GeoDataFrame(p).set_geometry("geometry") # Convert PD to GPD
+    productDF = productDF[~productDF["Name"].str.contains("L1C")] # Remove L1C dataset
+    print(f" total L2A tiles found {len(productDF)}")
+    productDF["identifier"] = productDF["Name"].str.split(".").str[0]
+    allfeat = len(productDF)
+
+
+
+
+    #return pd.DataFrame.from_dict(json_["value"])
+    return productDF
+
+
+
+def list_products (productDF, args) :
+
+    for index,feat in enumerate(productDF.iterfeatures()):
+        product_uuid = feat['properties']['Id']
+        product_name = feat['properties']['Name']
+        size_MiB = feat['properties']['ContentLength'] / (1024*1024)
+        print (f"{product_name} {size_MiB:5.0f}")
+
 
 
 def download_one_product (product_id, safe_download_path, safe_path, args) :
@@ -141,36 +182,20 @@ def download_one_product (product_id, safe_download_path, safe_path, args) :
                 print(f"problem with server: {e}")
 
 
-def list_products (p, args) :
-
-
-    #T TODO cut/paste from download_products
-    p["geometry"] = p["GeoFootprint"].apply(shape)
-    productDF = gpd.GeoDataFrame(p).set_geometry("geometry") # Convert PD to GPD
-    productDF = productDF[~productDF["Name"].str.contains("L1C")] # Remove L1C dataset
-    print(f" total L2A tiles found {len(productDF)}")
-    productDF["identifier"] = productDF["Name"].str.split(".").str[0]
-    allfeat = len(productDF)
-
-
-    for index,feat in enumerate(productDF.iterfeatures()):
-        product_uuid = feat['properties']['Id']
-        product_name = feat['properties']['Name']
-        print (f"{product_name}")
 
 
 
 #
-def download_products (p,args) :
+def download_products (productDF,args) :
 
-    p["geometry"] = p["GeoFootprint"].apply(shape)
-    productDF = gpd.GeoDataFrame(p).set_geometry("geometry") # Convert PD to GPD
-    productDF = productDF[~productDF["Name"].str.contains("L1C")] # Remove L1C dataset
-    print(f" total L2A tiles found {len(productDF)}")
-    productDF["identifier"] = productDF["Name"].str.split(".").str[0]
+    #p["geometry"] = p["GeoFootprint"].apply(shape)
+    #productDF = gpd.GeoDataFrame(p).set_geometry("geometry") # Convert PD to GPD
+    #productDF = productDF[~productDF["Name"].str.contains("L1C")] # Remove L1C dataset
+    #print(f" total L2A tiles found {len(productDF)}")
+    #productDF["identifier"] = productDF["Name"].str.split(".").str[0]
     allfeat = len(productDF)
         
-    tiles_of_interest = args.mgrs_tiles.split(",")
+    #tiles_of_interest = args.mgrs_tiles.split(",")
 
     if allfeat == 0:
         print("No tiles found.")
@@ -236,11 +261,12 @@ if __name__ == "__main__":
     parser.add_argument("--max-cloud", help="Limit to only products with this much cloud coverage or less.")
     parser.add_argument("--mgrs-tiles", help="MGRS tiles of interest separated by comma. Only download if in this set. Example 'T29UNU'.")
     parser.add_argument("--bounding-box", help="Lat/lng based bounding box of the area of interest. Example: 'POLYGON((2.51 49.52, 6.15 49.52, 6.15 51.48, 2.51 51.48, 2.51 49.52))'")
+    parser.add_argument("--bounding-box2", help="Lat/lng based bounding box of the area of interest. Example: 'POLYGON((2.51 49.52, 6.15 49.52, 6.15 51.48, 2.51 51.48, 2.51 49.52))'")
     parser.add_argument("--l2a-root",  help="The root of the L2A directory into which to write the L2A SAFE.zip files.", required=True)
     parser.add_argument("--username",  help="Dataspace username / email address.")
     parser.add_argument("--password",  help="Password associated with username.")
     parser.add_argument("--query-only", action="store_true", help="Only issue the product query and determine which products require downloading. No product downloads will take place.")
-
+    parser.add_argument("--debug", action="store_false", help="Output debugging information.")
     args = parser.parse_args()
 
     products = query_products (args) 

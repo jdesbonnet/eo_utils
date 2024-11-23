@@ -142,6 +142,17 @@ def download_one_product (product_id, safe_download_path, safe_path, args) :
 
 
 def list_products (p, args) :
+
+
+    #T TODO cut/paste from download_products
+    p["geometry"] = p["GeoFootprint"].apply(shape)
+    productDF = gpd.GeoDataFrame(p).set_geometry("geometry") # Convert PD to GPD
+    productDF = productDF[~productDF["Name"].str.contains("L1C")] # Remove L1C dataset
+    print(f" total L2A tiles found {len(productDF)}")
+    productDF["identifier"] = productDF["Name"].str.split(".").str[0]
+    allfeat = len(productDF)
+
+
     for index,feat in enumerate(productDF.iterfeatures()):
         product_uuid = feat['properties']['Id']
         product_name = feat['properties']['Name']

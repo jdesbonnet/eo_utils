@@ -71,12 +71,9 @@ def query_products (args) :
         for tile in tiles :
             #geographic_criteria += f"and Attributes/OData.CSC.StringAttribute/any(att:att/Name eq 'tileId' and att/OData.CSC.StringAttribute/Value eq '{tile}') "
             # substringof does not appear to be supported: https://stackoverflow.com/questions/24994774/webapi-2-2-does-not-support-substringof-function
-            #geographic_criteria += f"and contains(Name,'{tile}') eq true "
             tile_sub_clauses.append(f"contains(Name,'{tile}') eq true ")
-        print (f"tile_sub_clauses={tile_sub_clauses}")
-        tile_clause = " and (" + " or ".join(tile_sub_clauses) + ") "
-        print (f"tile_clause={tile_clause}")
-        geographic_criteria += tile_clause
+
+        geographic_criteria += " and (" + " or ".join(tile_sub_clauses) + ") "
 
  
     
@@ -103,17 +100,13 @@ def query_products (args) :
 
 
 
-    #T TODO cut/paste from download_products
     p = pd.DataFrame.from_dict(json_["value"])
     p["geometry"] = p["GeoFootprint"].apply(shape)
     productDF = gpd.GeoDataFrame(p).set_geometry("geometry") # Convert PD to GPD
-    productDF = productDF[~productDF["Name"].str.contains("L1C")] # Remove L1C dataset
+    #productDF = productDF[~productDF["Name"].str.contains("L1C")] # Remove L1C dataset
     print(f" total L2A tiles found {len(productDF)}")
     productDF["identifier"] = productDF["Name"].str.split(".").str[0]
     allfeat = len(productDF)
-
-
-
 
     #return pd.DataFrame.from_dict(json_["value"])
     return productDF
@@ -126,7 +119,26 @@ def list_products (productDF, args) :
         product_uuid = feat['properties']['Id']
         product_name = feat['properties']['Name']
         size_MiB = feat['properties']['ContentLength'] / (1024*1024)
-        print (f"{product_name} {size_MiB:5.0f}")
+        safe_file_path = get_safe_file_path(product_name,args)
+
+        downloaded_checkmark = ""
+        if os.path.exists(safe_file_path) :
+            downloaded_checkmark = "✔"
+
+        print (f"{product_name} {size_MiB:5.0f} {downloaded_checkmark}")
+
+
+
+def get_safe_file_path (product_name, args) :
+    if product_name.endswith(".SAFE") :
+        safe_file = f"{product_name}.zip"
+    else :
+        safe_file = f"{product_name}.SAFE.zip"
+
+    safe_parts = product_name.split('_')
+    mgrs_tile = safe_parts[5]
+    safe_path = f"{args.l2a_root}/{mgrs_tile}/{safe_file}"
+    return f"{args.l2a_root}/{mgrs_tile}/_downloading_{safe_file}"
 
 
 

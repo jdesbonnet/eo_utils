@@ -51,16 +51,33 @@ def query_products (args) :
     
     Parameters:
     
-    begin_date_string (string) : The date on which to begin the search. yyyy-MM-dd format.
-    
-    end_date_string (string)   : The end date for the search. yyyy-MM-dd format.
+    args (object) : arguments from argparse
     
     """
-        
+
+
+    #
+    # Calculate geographic area part of query based on bounding_box and mgrs_tiles argument.
+    #
+    geographic_criteria = ""
+
+    if args.bounding_box :
+        geographic_criteria += f"and OData.CSC.Intersects(area=geography'SRID=4326;{args.bounding_box}') " 
+
+    if args.mgrs_tiles :
+        tiles = args.mgrs_tiles.split(",")
+        print (f"tiles={tiles}")
+        for tile in tiles :
+            geographic_criteria +=  f"and Attributes/OData.CSC.StringAttribute/any(att:att/Name eq 'tileId' and att/OData.CSC.StringAttribute/Value eq '{tile}') "
+ 
+    
+    # OData API: https://documentation.dataspace.copernicus.eu/APIs/OData.html
+    # List of Sentinel-2 query attributes: https://catalogue.dataspace.copernicus.eu/odata/v1/Attributes(SENTINEL-2)
     # TODO: can we work the MGRS tiles in this query?
     query_url = (f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?" 
              f"$filter=Collection/Name eq 'SENTINEL-2' " 
-             f"and OData.CSC.Intersects(area=geography'SRID=4326;{args.bounding_box}') " 
+             f"and OData.CSC.Intersects(area=geography'SRID=4326;{args.bounding_box}') "
+             #f"{geographic_criteria}"
              f"and ContentDate/Start gt {args.begin_date}T00:00:00.000Z " 
              f"and ContentDate/Start lt {args.end_date}T00:00:00.000Z "
              f"and Attributes/OData.CSC.DoubleAttribute/any(att:att/Name eq 'cloudCover' and att/OData.CSC.DoubleAttribute/Value le {args.max_cloud})"
@@ -122,6 +139,14 @@ def download_one_product (product_id, safe_download_path, safe_path, args) :
                     
     except Exception as e:
                 print(f"problem with server: {e}")
+
+
+def list_products (p, args) :
+    for index,feat in enumerate(productDF.iterfeatures()):
+        product_uuid = feat['properties']['Id']
+        product_name = feat['properties']['Name']
+        print (f"{product_name}")
+
 
 
 #
@@ -194,14 +219,17 @@ def download_products (p,args) :
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Download Sentinel-2 L2A products.")
-    parser.add_argument("--begin-date",help="The begin date (yyyy-MM-dd) for the search.")
+
+    parser.add_argument("--begin-date",help="The begin date (yyyy-MM-dd) for the search.", required=True)
     parser.add_argument("--end-date",  help="The end date (yyyy-MM-dd) for the search.")
     parser.add_argument("--max-cloud", help="Limit to only products with this much cloud coverage or less.")
     parser.add_argument("--mgrs-tiles", help="MGRS tiles of interest separated by comma. Only download if in this set. Example 'T29UNU'.")
     parser.add_argument("--bounding-box", help="Lat/lng based bounding box of the area of interest. Example: 'POLYGON((2.51 49.52, 6.15 49.52, 6.15 51.48, 2.51 51.48, 2.51 49.52))'")
-    parser.add_argument("--l2a-root",  help="The root of the L2A directory into which to write the L2A SAFE.zip files.")
+    parser.add_argument("--l2a-root",  help="The root of the L2A directory into which to write the L2A SAFE.zip files.", required=True)
     parser.add_argument("--username",  help="Dataspace username / email address.")
     parser.add_argument("--password",  help="Password associated with username.")
+    parser.add_argument("--query-only", action="store_true", help="Only issue the product query and determine which products require downloading. No product downloads will take place.")
+
     args = parser.parse_args()
 
     products = query_products (args) 
@@ -209,8 +237,11 @@ if __name__ == "__main__":
     if products.shape[0] == 0 :
         print ("No products found that match query.")
         exit(0)
-        
-    download_products (products, args)
+    
 
+    if args.query_only == True :
+        list_products (products, args)
+    else :
+        download_products (products, args)
 
 

@@ -61,19 +61,23 @@ def query_products (args) :
     # Calculate geographic area part of query based on bounding_box and mgrs_tiles argument.
     #
     geographic_criteria = ""
-
     if args.bounding_box :
         geographic_criteria += f"and OData.CSC.Intersects(area=geography'SRID=4326;{args.bounding_box}') " 
+
+    cog_criteria = ""
+    if args.cog :
+        cog_criteria += "and contains(Name,'_COG')"
      
     # OData API: https://documentation.dataspace.copernicus.eu/APIs/OData.html
     # Older OData documentation: https://scihub.copernicus.eu/userguide/ODataAPI
     # List of Sentinel-1 query attributes: https://catalogue.dataspace.copernicus.eu/odata/v1/Attributes(SENTINEL-1)    
     # TODO: can we work the MGRS tiles in this query?
     query_url = (f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?" 
-             f"$filter=Collection/Name eq 'SENTINEL-1' and contains(Name,'GRD') eq true " 
-             f"{geographic_criteria}"
-             f"and ContentDate/Start gt {args.begin_date}T00:00:00.000Z " 
-             f"and ContentDate/Start lt {args.end_date}T00:00:00.000Z"
+             f"$filter=Collection/Name eq 'SENTINEL-1' and contains(Name,'GRD') eq true" 
+             f" {cog_criteria}"
+             f" {geographic_criteria}"
+             f" and ContentDate/Start gt {args.begin_date}T00:00:00.000Z" 
+             f" and ContentDate/Start lt {args.end_date}T00:00:00.000Z"
              f"&$count=True&$top=1000" 
              )
 
@@ -239,6 +243,7 @@ if __name__ == "__main__":
     parser.add_argument("--username",  help="Dataspace username / email address.")
     parser.add_argument("--password",  help="Password associated with username.")
     parser.add_argument("--query-only", action="store_true", help="Only issue the product query and determine which products require downloading. No product downloads will take place.")
+    parser.add_argument("--cog", action="store_true", help="Download COG version of product.")
     parser.add_argument("--debug", action="store_false", help="Output debugging information.")
     args = parser.parse_args()
 

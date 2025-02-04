@@ -91,7 +91,7 @@ def query_products (args) :
     p["geometry"] = p["GeoFootprint"].apply(shape)
     productDF = gpd.GeoDataFrame(p).set_geometry("geometry") # Convert PD to GPD
     #productDF = productDF[~productDF["Name"].str.contains("L1C")] # Remove L1C dataset
-    print(f" total L2A tiles found {len(productDF)}")
+    print(f" total GRD products found {len(productDF)}")
     productDF["identifier"] = productDF["Name"].str.split(".").str[0]
     allfeat = len(productDF)
 
@@ -121,11 +121,8 @@ def get_safe_file_path (product_name, args) :
         safe_file = f"{product_name}.zip"
     else :
         safe_file = f"{product_name}.SAFE.zip"
-
-    safe_parts = product_name.split('_')
-    mgrs_tile = safe_parts[5]
-    safe_path = f"{args.l2a_root}/{mgrs_tile}/{safe_file}"
-    return f"{args.l2a_root}/{mgrs_tile}/{safe_file}"
+        
+    return f"{args.grd_root}/{safe_file}"
 
 
 
@@ -187,17 +184,10 @@ def download_one_product (product_id, safe_download_path, safe_path, args) :
 #
 def download_products (productDF,args) :
 
-    #p["geometry"] = p["GeoFootprint"].apply(shape)
-    #productDF = gpd.GeoDataFrame(p).set_geometry("geometry") # Convert PD to GPD
-    #productDF = productDF[~productDF["Name"].str.contains("L1C")] # Remove L1C dataset
-    #print(f" total L2A tiles found {len(productDF)}")
-    #productDF["identifier"] = productDF["Name"].str.split(".").str[0]
     allfeat = len(productDF)
-        
-    #tiles_of_interest = args.mgrs_tiles.split(",")
-
+    
     if allfeat == 0:
-        print("No tiles found.")
+        print("No products found.")
     else:
         ## download all tiles from server
         for index,feat in enumerate(productDF.iterfeatures()):
@@ -224,28 +214,15 @@ def download_products (productDF,args) :
 
             print(f"SAFE_FILE={safe_file}")
 
-            safe_parts = product_name.split('_')
-            mgrs_tile = safe_parts[5]
-            
-            #if not mgrs_tile in tiles_of_interest :
-            #    print (f"only interested in {tiles_of_interest}, skipping {mgrs_tile}")
-            #    continue
-            	
-            # If directory for the tile does not exist, create it 
-            mgrs_tile_path = f"{args.l2a_root}/{mgrs_tile}"
-            if not os.path.exists(mgrs_tile_path) :
-                print(f"mkdir {mgrs_tile_path}")
-                os.mkdir(mgrs_tile_path)
-
             # If the product is already downloaded, skip (TODO: check for valid ZIP) 
-            safe_path = f"{args.l2a_root}/{mgrs_tile}/{safe_file}"
-            safe_download_path = f"{args.l2a_root}/{mgrs_tile}/_downloading_{safe_file}"
+            safe_path = f"{args.grd_root}/{safe_file}"
+            safe_download_path = f"{args.grd_root}/_downloading_{safe_file}"
             if os.path.exists(safe_path) :
                 print (f"Product {safe_path} already downloaded")
                 continue
             
             
-            print(f"Downloading mgrs_tile={mgrs_tile} product_name={product_name} product_id={product_uuid} into {safe_path}")
+            print(f"Downloading product_name={product_name} product_id={product_uuid} into {safe_path}")
                 
             download_one_product(feat['properties']['Id'],safe_download_path,safe_path,args)
 

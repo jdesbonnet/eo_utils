@@ -409,7 +409,7 @@
     function isConnected(){ return connected; }
 
     function send(type,payload){
-	console.log("attempting to send message: type=" +type + " payload="+payload);
+	console.log("sending message: type=" +type + " payload="+JSON.stringify(payload));
 	if(!connected) return; 
 	const msg=Object.assign({type,room,user:{id:my.id,name:my.name,color:my.color}},payload||{}); 
 	try{ ws.send(JSON.stringify(msg)); }catch(_){ } 

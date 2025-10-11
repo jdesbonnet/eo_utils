@@ -286,14 +286,21 @@
     if(socket && socket.readyState === WebSocket.OPEN){ socket.close(1000, 'reconnect'); }
     socket = new WebSocket(url);
 
-    socket.addEventListener('open', ()=>{ log(`Connected to ${url}`); });
+    socket.addEventListener('open', ()=>{ 
+      log(`Connected to ${url}`);
+      //const hello = {"type":"cursor","room":"default","user":{"id":"95d2924c-13fa-4003-a562-890d310d7288","name":"Guest-9634-B","color":"hsl(160 70% 55%)"},"latlng":[54.43171285946844,-19.31396484375]};
+      const hello = {type:"hello_from_client", room:"default", user:{id:"adfadf",name:"blah"}};
+      // Send hello message
+      socket.send(JSON.stringify(hello));
+    });
     socket.addEventListener('close', (ev)=>{ log(`Disconnected (${ev.code}${ev.reason?': '+ev.reason:''})`); });
     socket.addEventListener('error', (e)=>{ log(`WebSocket error`); console.error(e); });
 
     socket.addEventListener('message', async (ev)=>{
-console.log("msg=",ev);
+
       try {
         const msg = JSON.parse(ev.data);
+if (msg.type !== "cursor") console.log("msg=",ev);
         handleMessage(msg);
       } catch (e){
         log('Invalid JSON message ignored');
@@ -312,19 +319,44 @@ console.log("msg=",ev);
     // Determine type flexibly
     const type = msg.type || msg.message_type || inferType(msg);
 
-    if (type === 'user_pointer'){
-      const { latitude, longitude } = msg;
+    if (type === 'cursor'){
+      //const { latitude, longitude } = msg;
+      const latlng = msg.latlng;
+      const latitude = latlng[0];
+      const longitude = latlng[1];
+//console.log("lat=",latitude,"lng=",longitude);
       if (typeof latitude === 'number' && typeof longitude === 'number'){
-        upsertPointer(msg);
-        log(`Pointer → ${user_name||user_id} @ ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
+        // ({user_id, user_name, latitude, longitude, altitude, pointer_mode}
+        upsertPointer({
+          user_id: "abc", user_name:"A B C",
+          latitude: latitude, longitude: longitude, altitude:0,
+          pointer_mode: "default"
+        });
+        //log(`Pointer → ${user_name||user_id} @ ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
       }
       return;
     }
 
-    if (type === 'feature_create' || type === 'feature_update' || type === 'feature_create_or_update'){
-      const { feature_id, geojson } = msg;
+    if (type === 'feature_create' || type === 'feature_update' || type === 'feature' || type === "feature:add" || type === "feature:edit"){
+
+      const feature_id = msg.feature.properties._id;
+
+      const geojson = {
+          type: "FeatureCollection",
+          features: [
+	    msg.feature
+          ]
+      };
+      const geojsonStr = JSON.stringify(geojson);
+console.log("feature_create feature_id=", feature_id, "geojson=", geojsonStr);
+      log(`New or updated feature id = ${feature_id} geojson=${geojsonStr}`);
+
+      //const { feature_id, geojson } = msg;
       if (!feature_id || !geojson){ log('Feature message missing feature_id or geojson'); return; }
-      await createOrUpdateFeature(msg);
+      await createOrUpdateFeature({
+        feature_id: feature_id,
+        geojson: geojson
+      });
       log(`Feature ${feature_id} upserted`);
       return;
     }
@@ -341,7 +373,7 @@ console.log("msg=",ev);
       return;
     }
 
-    log(`Unknown message type; ignored`);
+    log(`Unknown message type ${type}; ignored`);
   }
 
   function inferType(m){
@@ -371,7 +403,7 @@ console.log("msg=",ev);
 
   // Center somewhere reasonable initially
   viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(-8, 53.5, 1000000) // Ireland vicinity
+    destination: Cesium.Cartesian3.fromDegrees(-8.99, 53.28, 1000) // Ireland vicinity
   });
 })();
 </script>

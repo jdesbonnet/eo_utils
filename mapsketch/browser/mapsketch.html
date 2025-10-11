@@ -3,22 +3,25 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>QuickMap — Leaflet One‑Page App</title>
+  <title>MapSketch - app to create quick and dirty maps</title>
 
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
   <!-- Geoman (drawing & editing) -->
   <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.14.1/dist/leaflet-geoman.css" />
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.14.1/dist/leaflet-geoman.min.js"></script>
-  <!-- GeoTIFF support -->
 
+  <!-- GeoTIFF support -->
   <script src="https://cdn.jsdelivr.net/npm/geotiff@2.1.4-beta.0/dist-browser/geotiff.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
   <script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js"></script>
+
   <!-- Import/Export helpers -->
   <script src="https://unpkg.com/tokml@0.4.0/tokml.js"></script>
   <script src="https://unpkg.com/@tmcw/togeojson@5.8.0/dist/togeojson.umd.js"></script>
+
   <!-- Screenshot (PNG export) -->
   <script src="https://unpkg.com/leaflet-simple-map-screenshoter"></script>
 
@@ -26,7 +29,6 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.awesome-markers@2.0.5/dist/leaflet.awesome-markers.min.css">
   <script src="https://cdn.jsdelivr.net/npm/leaflet.awesome-markers@2.0.5/dist/leaflet.awesome-markers.min.js"></script>
-
 
 
   <style>
@@ -64,7 +66,7 @@
 <body>
 <div id="app">
   <aside>
-    <h1>🗺️ QuickMap</h1>
+    <h1>MapSketch</h1>
     <div class="card">
       <div class="section-title">Drawing</div>
       <div class="muted small">Use the toolbar on the map (left) to add markers, lines, and polygons. Click a feature to select it.</div>

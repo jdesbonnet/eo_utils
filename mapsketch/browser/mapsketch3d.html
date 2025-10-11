@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CesiumJS WebSocket Map</title>
+  <!-- CesiumJS CDN -->
+  <link href="https://unpkg.com/cesium/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+  <script src="https://unpkg.com/cesium/Build/Cesium/Cesium.js"></script>
+  <style>
+    html, body, #app { height: 100%; margin: 0; }
+    #map { position: absolute; inset: 0; }
+    #panel {
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: rgba(16,16,20,0.85); color: #f2f2f2; padding: 12px; border-radius: 12px;
+      max-width: 420px; font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    #panel h3 { margin: 0 0 8px; font-size: 16px; }
+    #panel label { display:block; margin-top: 8px; opacity: .9; }
+    #panel input, #panel select, #panel button, #panel textarea {
+      width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px; border-radius: 8px; border: 1px solid #2e2e35; background:#181820; color:#f2f2f2;
+    }
+    #panel .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    #panel .btnrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+    #panel small { opacity: .75; }
+    #log { height: 100px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h3>Live Map Controls</h3>
+  <label>WebSocket URL
+    <input id="wsUrl" type="text" placeholder="ws://localhost:8080/ws" value="ws://localhost:8080/ws" />
+  </label>
+  <div class="row">
+    <button id="connectBtn">Connect</button>
+    <button id="disconnectBtn">Disconnect</button>
+  </div>
+  <div class="row">
+    <label>Zoom to user
+      <select id="userSelect"><option value="">—</option></select>
+    </label>
+    <label>Tile layer (XYZ template)
+      <input id="tileInput" type="text" placeholder="https://tile.openstreetmap.org/{z}/{x}/{y}.png" />
+    </label>
+  </div>
+  <div class="btnrow">
+    <button id="zoomAll">View all</button>
+    <button id="zoomUserFeatures">User’s features</button>
+    <button id="applyTiles">Set tiles</button>
+  </div>
+  <label>Events log
+    <textarea id="log" readonly></textarea>
+  </label>
+  <small>Expected messages include <em>user pointer</em>, <em>feature create/update</em>, <em>feature delete</em>, and <em>set tile layer</em>. See source code for schema details.</small>
+</div>
+<script>
+(function(){
+  // --- Cesium setup ---
+  window.CESIUM_BASE_URL = 'https://unpkg.com/cesium/Build/Cesium/';
+  const viewer = new Cesium.Viewer('map', {
+    terrain: Cesium.Terrain.fromWorldTerrain(),
+    animation: false,
+    timeline: false,
+    baseLayerPicker: true,
+    geocoder: true,
+    sceneModePicker: true,
+    navigationHelpButton: true,
+    fullscreenButton: true,
+  });
+  viewer.scene.globe.depthTestAgainstTerrain = true;
+
+  // --- State ---
+  const pointerEntitiesByUser = new Map(); // user_id -> Cesium.Entity
+  const featureSourcesById = new Map();    // feature_id -> Cesium.GeoJsonDataSource
+  const featureOwnerById = new Map();      // feature_id -> user_id
+  const userNameById = new Map();          // user_id -> user_name
+
+  // --- UI elements ---
+  const wsUrlInput = document.getElementById('wsUrl');
+  const connectBtn = document.getElementById('connectBtn');
+  const disconnectBtn = document.getElementById('disconnectBtn');
+  const userSelect = document.getElementById('userSelect');
+  const tileInput = document.getElementById('tileInput');
+  const applyTilesBtn = document.getElementById('applyTiles');
+  const zoomAllBtn = document.getElementById('zoomAll');
+  const zoomUserFeaturesBtn = document.getElementById('zoomUserFeatures');
+  const logEl = document.getElementById('log');
+
+  let socket = null;
+
+  // --- Helpers ---
+  function log(msg){
+    const t = new Date().toISOString();
+    logEl.value = `[${t}] ${msg}\n` + logEl.value;
+  }
+
+  function ensureUserOption(user_id, user_name){
+    if(!userNameById.has(user_id)){
+      userNameById.set(user_id, user_name || user_id);
+      const opt = document.createElement('option');
+      opt.value = user_id;
+      opt.textContent = user_name ? `${user_name} (${user_id})` : user_id;
+      userSelect.appendChild(opt);
+    } else if (user_name && userNameById.get(user_id) !== user_name){
+      userNameById.set(user_id, user_name);
+      // update existing option label
+      [...userSelect.options].forEach(o=>{ if(o.value===user_id){ o.textContent = `${user_name} (${user_id})`; } });
+    }
+  }
+
+  // Simple SVG pin icons as data URIs by pointer_mode
+  const iconByMode = {
+    default: svgPin('#00AEEF'),
+    arrow: svgPin('#FF8C00'),
+    laser: svgPin('#FF3860'),
+    hand: svgPin('#32CD32')
+  };
+  function svgPin(color){
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='${color}' stroke-width='1.5'>\n<path fill='${color}' d='M12 22s7-7.36 7-12a7 7 0 10-14 0c0 4.64 7 12 7 12z'/>\n<circle cx='12' cy='10' r='3' fill='white'/>\n</svg>`;
+    return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+  }
+
+  function upsertPointer({user_id, user_name, latitude, longitude, altitude, pointer_mode}){
+    ensureUserOption(user_id, user_name);
+    const alt = Number.isFinite(altitude) ? altitude : 0; // ground level default
+    const mode = pointer_mode && iconByMode[pointer_mode] ? pointer_mode : 'default';
+    const image = iconByMode[mode];
+
+    let ent = pointerEntitiesByUser.get(user_id);
+    if(!ent){
+      ent = viewer.entities.add({
+        id: `user-pointer-${user_id}`,
+        position: Cesium.Cartesian3.fromDegrees(longitude, latitude, alt),
+        billboard: {
+          image,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          scale: 0.8,
+        },
+        label: {
+          text: user_name || user_id,
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          verticalOrigin: Cesium.VerticalOrigin.TOP,
+          pixelOffset: new Cesium.Cartesian2(0, -48)
+        },
+        properties: { user_id, user_name }
+      });
+      pointerEntitiesByUser.set(user_id, ent);
+    } else {
+      ent.position = Cesium.Cartesian3.fromDegrees(longitude, latitude, alt);
+      ent.billboard.image = image;
+      if(user_name) ent.label.text = user_name;
+    }
+  }
+
+  async function createOrUpdateFeature({feature_id, geojson, style, user_id, user_name}){
+    ensureUserOption(user_id, user_name);
+    let ds = featureSourcesById.get(feature_id);
+
+    // If exists, remove and replace with new geojson to ensure full sync
+    if(ds){
+      viewer.dataSources.remove(ds, true);
+      featureSourcesById.delete(feature_id);
+    }
+    ds = await Cesium.GeoJsonDataSource.load(geojson, {
+      clampToGround: true,
+    });
+
+    applyStyleToDataSource(ds, style);
+
+    await viewer.dataSources.add(ds);
+    featureSourcesById.set(feature_id, ds);
+    featureOwnerById.set(feature_id, user_id || null);
+
+    // Tag entities for later filtering
+    ds.entities.values.forEach(e => {
+      e.properties = e.properties || new Cesium.PropertyBag();
+      e.properties.feature_id = feature_id;
+      if (user_id) e.properties.user_id = user_id;
+      if (user_name) e.properties.user_name = user_name;
+    });
+  }
+
+  function applyStyleToDataSource(ds, style={}){
+    const {
+      strokeColor = '#00AEEF',
+      strokeWidth = 2,
+      fillColor = 'rgba(0,174,239,0.25)',
+      pointSize = 12,
+      labelField = null,
+    } = style || {};
+
+    const stroke = colorFromCss(strokeColor);
+    const fill = colorFromCss(fillColor);
+
+    ds.entities.values.forEach(ent => {
+      if (ent.polyline) {
+        ent.polyline.material = stroke;
+        ent.polyline.width = strokeWidth;
+        ent.polyline.clampToGround = true;
+      }
+      if (ent.polygon) {
+        ent.polygon.material = fill;
+        ent.polygon.outline = true;
+        ent.polygon.outlineColor = stroke;
+        ent.polygon.outlineWidth = strokeWidth;
+        ent.polygon.heightReference = Cesium.HeightReference.CLAMP_TO_GROUND;
+      }
+      if (ent.point) {
+        ent.point.pixelSize = pointSize;
+        ent.point.color = stroke;
+        ent.point.heightReference = Cesium.HeightReference.CLAMP_TO_GROUND;
+      }
+      if (labelField && ent.properties && ent.properties[labelField]){
+        ent.label = ent.label || new Cesium.LabelGraphics();
+        ent.label.text = new Cesium.ConstantProperty(String(ent.properties[labelField].getValue()));
+        ent.label.fillColor = Cesium.Color.WHITE;
+        ent.label.outlineColor = Cesium.Color.BLACK;
+        ent.label.style = Cesium.LabelStyle.FILL_AND_OUTLINE;
+      }
+    });
+  }
+
+  function colorFromCss(css){
+    // Accepts #RRGGBB[AA] or rgba(r,g,b,a)
+    try {
+      const c = Cesium.Color.fromCssColorString(css);
+      return c;
+    } catch { return Cesium.Color.WHITE; }
+  }
+
+  function deleteFeature({feature_id}){
+    const ds = featureSourcesById.get(feature_id);
+    if (!ds) return;
+    viewer.dataSources.remove(ds, true);
+    featureSourcesById.delete(feature_id);
+    featureOwnerById.delete(feature_id);
+  }
+
+  function setTileLayer(urlTemplate){
+    if(!urlTemplate) return;
+    const provider = new Cesium.UrlTemplateImageryProvider({ url: urlTemplate });
+    viewer.imageryLayers.removeAll();
+    viewer.imageryLayers.addImageryProvider(provider);
+  }
+
+  function zoomToAll(){
+    const targets = [];
+    // pointers
+    pointerEntitiesByUser.forEach(ent => targets.push(ent));
+    // feature data sources
+    featureSourcesById.forEach(ds => targets.push(ds));
+    if(targets.length){ viewer.zoomTo(targets); }
+  }
+
+  function zoomToUser(user_id){
+    if(!user_id) return;
+    const targets = [];
+    const ptr = pointerEntitiesByUser.get(user_id);
+    if(ptr) targets.push(ptr);
+    featureSourcesById.forEach((ds, fid) => {
+      if (featureOwnerById.get(fid) === user_id) targets.push(ds);
+    });
+    if(targets.length){ viewer.zoomTo(targets); }
+  }
+
+  function zoomToUserFeatures(user_id){
+    if(!user_id) return;
+    const targets = [];
+    featureSourcesById.forEach((ds, fid) => {
+      if (featureOwnerById.get(fid) === user_id) targets.push(ds);
+    });
+    if(targets.length){ viewer.zoomTo(targets); }
+  }
+
+  // --- WebSocket handling ---
+  function connect(){
+    const url = wsUrlInput.value.trim();
+    if(!url){ alert('Please enter a WebSocket URL'); return; }
+    if(socket && socket.readyState === WebSocket.OPEN){ socket.close(1000, 'reconnect'); }
+    socket = new WebSocket(url);
+
+    socket.addEventListener('open', ()=>{ log(`Connected to ${url}`); });
+    socket.addEventListener('close', (ev)=>{ log(`Disconnected (${ev.code}${ev.reason?': '+ev.reason:''})`); });
+    socket.addEventListener('error', (e)=>{ log(`WebSocket error`); console.error(e); });
+
+    socket.addEventListener('message', async (ev)=>{
+console.log("msg=",ev);
+      try {
+        const msg = JSON.parse(ev.data);
+        handleMessage(msg);
+      } catch (e){
+        log('Invalid JSON message ignored');
+      }
+    });
+  }
+
+  function disconnect(){ if(socket){ socket.close(1000, 'manual'); socket = null; } }
+
+  async function handleMessage(msg){
+
+    // All messages include user_id, user_name, timestamp per spec
+    const { user_id, user_name } = msg;
+    if (user_id) ensureUserOption(user_id, user_name);
+
+    // Determine type flexibly
+    const type = msg.type || msg.message_type || inferType(msg);
+
+    if (type === 'user_pointer'){
+      const { latitude, longitude } = msg;
+      if (typeof latitude === 'number' && typeof longitude === 'number'){
+        upsertPointer(msg);
+        log(`Pointer → ${user_name||user_id} @ ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
+      }
+      return;
+    }
+
+    if (type === 'feature_create' || type === 'feature_update' || type === 'feature_create_or_update'){
+      const { feature_id, geojson } = msg;
+      if (!feature_id || !geojson){ log('Feature message missing feature_id or geojson'); return; }
+      await createOrUpdateFeature(msg);
+      log(`Feature ${feature_id} upserted`);
+      return;
+    }
+
+    if (type === 'feature_delete'){
+      deleteFeature(msg);
+      log(`Feature ${msg.feature_id} deleted`);
+      return;
+    }
+
+    if (type === 'set_tile_layer'){
+      const template = msg.url || msg.template || msg.tiles || msg.tile_url;
+      if(template){ setTileLayer(template); log('Tile layer updated'); }
+      return;
+    }
+
+    log(`Unknown message type; ignored`);
+  }
+
+  function inferType(m){
+    if (typeof m.latitude === 'number' && typeof m.longitude === 'number') return 'user_pointer';
+    if (m.feature_id && m.geojson) return 'feature_create_or_update';
+    if (m.feature_id && !m.geojson && !m.style) return 'feature_delete';
+    if (m.url || m.template || m.tiles || m.tile_url) return 'set_tile_layer';
+    return 'unknown';
+  }
+
+  // --- Wire up UI ---
+  connectBtn.addEventListener('click', connect);
+  disconnectBtn.addEventListener('click', disconnect);
+  applyTilesBtn.addEventListener('click', ()=> setTileLayer(tileInput.value.trim()));
+  zoomAllBtn.addEventListener('click', zoomToAll);
+  userSelect.addEventListener('change', ()=>{
+    const uid = userSelect.value;
+    if(uid) zoomToUser(uid);
+  });
+  zoomUserFeaturesBtn.addEventListener('click', ()=>{
+    const uid = userSelect.value; if(uid) zoomToUserFeatures(uid);
+  });
+
+  // --- Sensible defaults ---
+  tileInput.value = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  setTileLayer(tileInput.value);
+
+  // Center somewhere reasonable initially
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(-8, 53.5, 1000000) // Ireland vicinity
+  });
+})();
+</script>
+</body>
+</html>
+
+

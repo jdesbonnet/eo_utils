@@ -114,10 +114,16 @@
   // Marker icons via AwesomeMarkers
   function setMarkerIcon(marker, value){
     const [iconName, color] = value.split(',');
-    const icon = L.AwesomeMarkers.icon({ icon: iconName.replace('fa-',''), prefix:'fa', markerColor: getColorName(color), iconColor: 'white' });
+    const icon = L.AwesomeMarkers.icon({ 
+      icon: iconName.replace('fa-',''), 
+      prefix:'fa', 
+      markerColor: getColorName(color), 
+      iconColor: 'white' 
+    });
     marker.setIcon(icon);
     marker.options._am = { iconName, color };// store for export
   }
+
   // Map a hex to closest awesome marker color name (simple)
   function getColorName(hex){
     const palette = {
@@ -236,6 +242,10 @@
     fhPointerId = null;
   }
 
+
+
+
+  // Add stylus event handler to map container
   const container = map.getContainer();
   container.addEventListener('pointerdown', startFreehand);
   container.addEventListener('pointermove', moveFreehand);
@@ -245,7 +255,11 @@
   document.getElementById('fhEnableBtn').onclick = function(){ setFreehandEnabled(true); };
   document.getElementById('fhDisableBtn').onclick = function(){ setFreehandEnabled(false); };
 
+
+
+  //
   // Undo/Redo History
+  //
   let undoStack = [];
   let redoStack = [];
   let isRestoring = false;
@@ -308,7 +322,11 @@
   ;['strokeColor','fillColor','opacity','lineType','markerIcon'].forEach(id=>{ const el = document.getElementById(id); if(el) el.addEventListener('change', scheduleSnapshot); });
   setTimeout(initHistory, 0);
 
+
+
+  //
   // Collaboration — simple WebSocket transport
+  //
   let isRemoteApplying = false;
   function uuidv4(){
     if(window.crypto && crypto.getRandomValues){
@@ -493,9 +511,17 @@
     document.getElementById('collabDisconnect').onclick=disconnect;
     document.getElementById('jumpToUser').onclick=()=>{ const id=followSelect.value; if(!id) return; const p=participants.get(id); if(p&&p.lastView){ map.setView(p.lastView.center,p.lastView.zoom);} };
 
-    let lastCursorSent=0; map.getContainer().addEventListener('pointermove',(e)=>{ if(!connected) return; const now=performance.now(); if(now-lastCursorSent<50) return; lastCursorSent=now; const ll=map.mouseEventToLatLng(e); sendCursor([ll.lat,ll.lng]); });
-    map.on('moveend',()=>{ if(connected && broadcastView.value==='yes') sendView(); });
+    let lastCursorSent=0; 
+    map.getContainer().addEventListener('pointermove',(e)=>{ 
+        if(!connected) return; 
+        const now=performance.now(); 
+        if(now-lastCursorSent<50) return; 
+        lastCursorSent=now; 
+        const ll=map.mouseEventToLatLng(e); 
+        sendCursor([ll.lat,ll.lng]); 
+    });
 
+    map.on('moveend',()=>{ if(connected && broadcastView.value==='yes') sendView(); });
     map.on('pm:create',e=>{ if(connected) sendAdd(e.layer); });
     map.on('pm:edit',e=>{ if(connected) sendEdit(e.layer); });
     map.on('pm:dragend',e=>{ if(connected) sendEdit(e.layer); });
@@ -505,6 +531,9 @@
   }
 
   const collab = createCollab(map, drawn);
+
+
+
 
   // Basemap switching buttons
   document.getElementById('osmBtn').onclick = ()=>{ if(!map.hasLayer(osm)) { esri.remove(); osm.addTo(map);} };

@@ -319,11 +319,13 @@ if (msg.type !== "cursor") console.log("msg=",ev);
     // Determine type flexibly
     const type = msg.type || msg.message_type || inferType(msg);
 
-    if (type === 'cursor'){
+    if (type === 'cursor' || type === 'pointermove' ){
       //const { latitude, longitude } = msg;
       const latlng = msg.latlng;
       const latitude = latlng[0];
       const longitude = latlng[1];
+      const pointerType = msg.pt;
+
 //console.log("lat=",latitude,"lng=",longitude);
       if (typeof latitude === 'number' && typeof longitude === 'number'){
         // ({user_id, user_name, latitude, longitude, altitude, pointer_mode}

@@ -408,8 +408,9 @@
     function disconnect(){ if(ws){ try{ ws.close(); }catch(_){ } ws=null; connected=false; } }
     function isConnected(){ return connected; }
 
+    // Send message to server for rebroadcasting
     function send(type,payload){
-	console.log("sending message: type=" +type + " payload="+JSON.stringify(payload));
+	console.log("sending: type=" +type + " payload="+JSON.stringify(payload));
 	if(!connected) return; 
 	const msg=Object.assign({type,room,user:{id:my.id,name:my.name,color:my.color}},payload||{}); 
 	try{ ws.send(JSON.stringify(msg)); }catch(_){ } 
@@ -427,7 +428,7 @@
             renderPresence(); 
             return;
         }
-        if(type==='cursor'&&msg.latlng){
+        if( (type==='cursor' || type==='pointermove') && msg.latlng){
             if(!p.cursor){
                 p.cursor=L.marker(msg.latlng,{zIndexOffset:10000,icon:createCursorIcon(p.name,p.color)}).addTo(map); 
             } else { 
@@ -501,8 +502,7 @@
     }
     function removeFeatureById(id){ const l=findLayerById(id); if(l) drawn.removeLayer(l); }
 
-    function sendCursor(latlng){ send('cursor',{latlng}); }
-    function sendView(){ const c=map.getCenter(); send('view',{center:[c.lat,c.lng],zoom:map.getZoom()}); }
+    //function sendView(){ const c=map.getCenter(); send('view',{center:[c.lat,c.lng],zoom:map.getZoom()}); }
     function sendAdd(layer){ if(isRemoteApplying) return; ensureLayerId(layer); setMetaOnCreate(layer); send('feature:add',{feature:toSingleGeoJSON(layer)}); }
     function sendEdit(layer){ if(isRemoteApplying) return; if(!layer) return; updateMetaOnEdit(layer); send('feature:edit',{feature:toSingleGeoJSON(layer)}); }
     function sendRemove(layer){ if(isRemoteApplying) return; if(!layer) return; const id=layer.options&&layer.options._id; if(id) send('feature:remove',{id}); }
@@ -512,16 +512,36 @@
     document.getElementById('jumpToUser').onclick=()=>{ const id=followSelect.value; if(!id) return; const p=participants.get(id); if(p&&p.lastView){ map.setView(p.lastView.center,p.lastView.zoom);} };
 
     let lastCursorSent=0; 
-    map.getContainer().addEventListener('pointermove',(e)=>{ 
+    map.getContainer().addEventListener('pointermove',(e)=>{
         if(!connected) return; 
         const now=performance.now(); 
         if(now-lastCursorSent<50) return; 
         lastCursorSent=now; 
         const ll=map.mouseEventToLatLng(e); 
-        sendCursor([ll.lat,ll.lng]); 
+        send('pointermove',{latlng:[ll.lat,ll.lng],pt:e.pointerType}); 
     });
 
-    map.on('moveend',()=>{ if(connected && broadcastView.value==='yes') sendView(); });
+    map.getContainer().addEventListener('pointerdown',(e)=>{
+        if(!connected) return; 
+        const ll=map.mouseEventToLatLng(e);
+        send('pointerdown',{latlng:[ll.lat,ll.lng],pt:e.pointerType}); 
+    });
+    map.getContainer().addEventListener('pointerup',(e)=>{
+        if(!connected) return; 
+        const ll=map.mouseEventToLatLng(e);
+        send('pointerup',{latlng:[ll.lat,ll.lng],pt:e.pointerType}); 
+    });
+
+    // Broadcast update of view window after any move event
+    map.on('moveend',()=>{ 
+        if(connected && broadcastView.value==='yes') {
+            //sendView();
+            const c=map.getCenter();
+            send('view',{center:[c.lat,c.lng],zoom:map.getZoom()});
+        } 
+    });
+
+    // Broadcast geoman edit operations
     map.on('pm:create',e=>{ if(connected) sendAdd(e.layer); });
     map.on('pm:edit',e=>{ if(connected) sendEdit(e.layer); });
     map.on('pm:dragend',e=>{ if(connected) sendEdit(e.layer); });

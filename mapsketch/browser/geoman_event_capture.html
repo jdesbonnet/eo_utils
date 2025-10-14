@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Leaflet + Geoman Event Capture & Playback (POC)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css" />
+  <style>
+    html, body { height: 100%; margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+    #app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+    header { padding: 10px; border-bottom: 1px solid #e5e7eb; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    header .spacer { flex: 1 1 auto; }
+    button, input[type="file"], select, label { padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 10px; background: #fff; cursor: pointer; }
+    label.inline { display: inline-flex; align-items: center; gap: 8px; }
+    button.primary { background: #111827; color: #fff; border-color: #111827; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #mapwrap { position:relative; }
+    #map { width: 100%; height: 100%; }
+    #log { position: absolute; right: 10px; bottom: 10px; max-width: 420px; width: 36ch; height: 180px; overflow: auto; background: rgba(255,255,255,0.9); border: 1px solid #e5e7eb; border-radius: 10px; padding: 8px; font-size: 12px; }
+    #progress { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); width: min(720px, 90vw); background: rgba(0,0,0,0.04); border-radius: 999px; overflow: hidden; border: 1px solid #e5e7eb; height: 16px; }
+    #bar { height: 100%; width: 0%; background: #2563eb; transition: width 40ms linear; }
+    .badge { margin-left: 8px; padding: 6px 10px; border-radius: 999px; font-size: 12px; border:1px solid #e5e7eb; background: #f3f4f6; display:none; align-items:center; gap:6px; }
+    .badge.playing { display:inline-flex; }
+
+    /* Ghost cursor for playback */
+    #ghostCursor { position: absolute; left:0; top:0; pointer-events: none; z-index: 9999; display: none; }
+    #ghostCursor .dot { width: 12px; height: 12px; border-radius: 999px; background: #111827; opacity: 0.9; transform: translate(-50%, -50%); }
+    #ghostCursor .tag { position: absolute; top: -24px; left: 12px; transform: translateX(-50%); background: rgba(17,24,39,0.9); color:#fff; padding: 2px 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; }
+    #ghostCursor.click .dot { width: 16px; height: 16px; opacity: 1; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <button id="startRec" class="primary">Start Recording</button>
+    <button id="stopRec" disabled>Stop Recording</button>
+    <button id="downloadBtn" disabled>Download Events</button>
+    <input id="upload" type="file" accept="application/json" />
+    <div class="spacer"></div>
+    <label class="inline">Playback speed
+      <select id="speed">
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.5">1.5×</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+      </select>
+    </label>
+    <label class="inline"><input type="checkbox" id="blockInput" checked /> Block real input during playback</label>
+    <span id="playingBadge" class="badge">▶ Playing…</span>
+    <button id="playBtn">Play</button>
+    <button id="pauseBtn" disabled>Pause</button>
+    <button id="resetBtn">Reset</button>
+  </header>
+  <div id="mapwrap">
+    <div id="map"></div>
+    <div id="ghostCursor"><div class="dot"></div><div class="tag">User1</div></div>
+    <div id="progress"><div id="bar"></div></div>
+    <pre id="log"></pre>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
+<script>
+(function(){
+  // --- Helpers ---
+  const logEl = document.getElementById('log');
+  const progressBar = document.getElementById('bar');
+  const playingBadge = document.getElementById('playingBadge');
+  const blockInputChk = document.getElementById('blockInput');
+  const ghost = document.getElementById('ghostCursor');
+  const ghostDot = ghost.querySelector('.dot');
+  function log(obj){
+    const line = typeof obj === 'string' ? obj : JSON.stringify(obj);
+    const lines = logEl.textContent.split('\n');
+    lines.push(line);
+    while (lines.length > 200) lines.shift();
+    logEl.textContent = lines.join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function now(){ return performance.now(); }
+
+  // --- Map setup ---
+  const map = L.map('map').setView([53.3498, -6.2603], 13); // Dublin as default
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  // Enable Geoman toolbar with common tools
+  map.pm.addControls({
+    position: 'topleft',
+    drawMarker: true,
+    drawCircleMarker: true,
+    drawPolyline: true,
+    drawPolygon: true,
+    drawRectangle: true,
+    drawCircle: true,
+    editMode: true,
+    dragMode: true,
+    cutPolygon: true,
+    removalMode: true
+  });
+
+  // --- Recording engine ---
+  const recorder = {
+    events: [],
+    active: false,
+    t0: null,
+    start(){
+      this.events = [];
+      this.t0 = now();
+      this.active = true;
+      log({msg:'Recording started'});
+    },
+    stop(){
+      this.active = false;
+      log({msg:'Recording stopped', count: this.events.length});
+    },
+    push(type, payload){
+      if(!this.active) return;
+      const t = now() - this.t0;
+      this.events.push({ t, type, payload });
+    }
+  };
+
+  // Utility to capture pointer payload with pixel + latlng
+  const mapEl = map.getContainer();
+  function pointerPayload(ev){
+    const { clientX, clientY, button = 0, pointerType = ev.pointerType || 'mouse'} = ev;
+    const rect = mapEl.getBoundingClientRect();
+    const x = clientX - rect.left, y = clientY - rect.top;
+    const latlng = map.containerPointToLatLng([x, y]);
+    return { x, y, lat: latlng.lat, lng: latlng.lng, button, pointerType };
+  }
+
+  // Record pointer movements continuously with throttling
+  let lastMoveT = 0;
+  function onPointerMove(ev){
+    const t = now();
+    if(t - lastMoveT < 16) return; // ~60 Hz cap
+    lastMoveT = t;
+    recorder.push('pointermove', pointerPayload(ev));
+  }
+  function onPointerDown(ev){ recorder.push('pointerdown', pointerPayload(ev)); }
+  function onPointerUp(ev){ recorder.push('pointerup', pointerPayload(ev)); }
+  function onClick(ev){ recorder.push('click', pointerPayload(ev)); }
+  function onDblClick(ev){ recorder.push('dblclick', pointerPayload(ev)); }
+
+  // Attach native listeners to the actual map container
+  mapEl.addEventListener('pointermove', onPointerMove, { passive: true });
+  mapEl.addEventListener('pointerdown', onPointerDown);
+  mapEl.addEventListener('pointerup', onPointerUp);
+  mapEl.addEventListener('click', onClick);
+  mapEl.addEventListener('dblclick', onDblClick);
+
+  // Record map zoom/pan changes (so playback follows the same view)
+  map.on('zoomend', () => { recorder.push('zoom', { zoom: map.getZoom() }); });
+  map.on('moveend', () => { const c = map.getCenter(); recorder.push('move', { lat: c.lat, lng: c.lng }); });
+
+  // Record Geoman mode toggles and layer lifecycle
+  map.on('pm:drawstart', e => { recorder.push('pm:drawstart', { shape: e.shape, options: (e.options||{}) }); });
+  map.on('pm:drawend', e => { recorder.push('pm:drawend', { shape: e.shape }); });
+  map.on('pm:globaleditmodetoggled', e => { recorder.push('pm:globaleditmodetoggled', { enabled: e.enabled }); });
+  map.on('pm:globaldragmodetoggled', e => { recorder.push('pm:globaldragmodetoggled', { enabled: e.enabled }); });
+  map.on('pm:removalmodetoggled', e => { recorder.push('pm:removalmodetoggled', { enabled: e.enabled }); });
+  map.on('pm:create', e => { recorder.push('pm:create', { shape: e.shape, geojson: e.layer.toGeoJSON() }); });
+
+  // Attach hooks to layers for edit lifecycle capture
+  function attachLayerHooks(layer){
+    layer.on('pm:edit', () => { recorder.push('pm:edit', { id: L.stamp(layer), geojson: layer.toGeoJSON() }); });
+    layer.on('pm:dragstart', () => { recorder.push('pm:dragstart', { id: L.stamp(layer) }); });
+    layer.on('pm:drag', () => { recorder.push('pm:drag', { id: L.stamp(layer), geojson: layer.toGeoJSON() }); });
+    layer.on('pm:dragend', () => { recorder.push('pm:dragend', { id: L.stamp(layer), geojson: layer.toGeoJSON() }); });
+    layer.on('pm:remove', () => { recorder.push('pm:remove', { id: L.stamp(layer) }); });
+    layer.on('pm:vertexadded', (e) => { recorder.push('pm:vertexadded', { id: L.stamp(layer), latlng: e.marker.getLatLng() }); });
+    layer.on('pm:vertexremoved', () => { recorder.push('pm:vertexremoved', { id: L.stamp(layer) }); });
+  }
+  map.on('pm:create', (e) => attachLayerHooks(e.layer));
+  map.on('layeradd', (e) => { const l = e.layer; if (!(l instanceof L.TileLayer) && l.pm && l.pm.enable) attachLayerHooks(l); });
+
+  // --- Playback engine ---
+  const player = {
+    timeline: [], idx: 0, startAt: 0, speed: 1, playing: false, onDone: null,
+    load(events){ this.timeline = events.slice().sort((a,b)=>a.t-b.t); this.idx = 0; this.startAt = now(); this.playing = false; setProgress(0); },
+    play(){ if(!this.timeline.length) return; this.playing = true; showGhost(true); setInputBlocked(blockInputChk.checked); showPlayingBadge(true); this.startAt = now() - (this.timeline[this.idx]?.t || 0) / this.speed; tick(); },
+    pause(){ this.playing = false; showPlayingBadge(false); },
+    reset(){ this.idx = 0; this.playing = false; setProgress(0); showGhost(false); setInputBlocked(false); showPlayingBadge(false); },
+  };
+
+  function setProgress(p){ progressBar.style.width = (p*100).toFixed(1)+'%'; }
+  function showPlayingBadge(on){ playingBadge.classList.toggle('playing', !!on); }
+
+  // Ghost cursor controls
+  function showGhost(on){ ghost.style.display = on ? 'block' : 'none'; }
+  function moveGhost(x,y){ ghost.style.transform = `translate(${x}px, ${y}px)`; }
+  function clickGhost(on){ ghost.classList.toggle('click', !!on); }
+
+  // Input blocking during playback
+  let inputBlocked = false;
+  const typesToBlock = ['pointerdown','pointermove','pointerup','click','dblclick','contextmenu','wheel'];
+
+
+
+
+//  function eventBlocker(e){ if(player.playing && inputBlocked){ e.stopImmediatePropagation(); e.preventDefault(); } }
+/*
+ function eventBlocker(e){
+   // Allow our own simulated playback events through so Geoman sees them
+   if (player.playing && inputBlocked && !e.__simulated) {
+     e.stopImmediatePropagation();
+     e.preventDefault();
+   }
+ }
+*/
+function eventBlocker(e) {
+}
+
+  function setInputBlocked(on){
+    if(on === inputBlocked) return;
+    inputBlocked = !!on;
+    typesToBlock.forEach(t => {
+      if (inputBlocked) mapEl.addEventListener(t, eventBlocker, true);
+      else mapEl.removeEventListener(t, eventBlocker, true);
+    });
+    // Also disable Leaflet interactions for belt & braces
+    if (inputBlocked){
+      map.dragging.disable();
+      map.scrollWheelZoom.disable();
+      map.boxZoom.disable();
+      map.keyboard.disable();
+      if (map.tap) map.tap.disable();
+    } else {
+      map.dragging.enable();
+      map.scrollWheelZoom.enable();
+      map.boxZoom.enable();
+      map.keyboard.enable();
+      if (map.tap) map.tap.enable();
+    }
+  }
+
+
+  function dispatchPointer(type, payload){
+    const { x, y, button, pointerType } = payload;
+    // Move ghost visual on each pointer event so movement is visible
+    if (type === 'pointermove') moveGhost(x, y);
+    if (type === 'pointerdown') clickGhost(true);
+    if (type === 'pointerup') clickGhost(false);
+
+    // Build and dispatch the real event for Leaflet/Geoman
+    const rect = mapEl.getBoundingClientRect();
+    const clientX = rect.left + x, clientY = rect.top + y;
+    const opts = { bubbles: true, cancelable: true, clientX, clientY, button, pointerType };
+    let ev; try { ev = new PointerEvent(type, opts); } catch(err){ ev = new MouseEvent(type, opts); }
+    mapEl.dispatchEvent(ev);
+  }
+
+
+/*
+ function dispatchPointer(type, payload){
+   const { x, y, button, pointerType } = payload;
+
+   // Update ghost cursor visuals
+   if (type === 'pointermove') moveGhost(x, y);
+   if (type === 'pointerdown') clickGhost(true);
+   if (type === 'pointerup') clickGhost(false);
+
+   // Event coordinates
+   const rect = mapEl.getBoundingClientRect();
+   const clientX = rect.left + x;
+   const clientY = rect.top + y;
+
+   // Tag events so the input blocker ignores them
+   const tagSim = (ev) => {
+     try { Object.defineProperty(ev, '__simulated', { value: true }); }
+     catch (_) { ev.__simulated = true; }
+     return ev;
+   };
+
+   // 1) Dispatch PointerEvent (primary)
+   let pev = null;
+   try {
+     pev = new PointerEvent(type, {
+       bubbles: true,
+       cancelable: true,
+       clientX,
+       clientY,
+       button,
+       pointerType
+     });
+   } catch (_) {
+     // Older browsers may not support PointerEvent; we'll rely on mouse events below.
+   }
+   if (pev) mapEl.dispatchEvent(tagSim(pev));
+
+   // 2) Dispatch MouseEvent equivalents (many libs listen to mouse* only)
+   const mouseMap = { pointermove: 'mousemove', pointerdown: 'mousedown', pointerup: 'mouseup' };
+   const mtype = mouseMap[type] || ((type === 'click' || type === 'dblclick') ? type : null);
+   if (mtype){
+     const mev = new MouseEvent(mtype, {
+       bubbles: true,
+       cancelable: true,
+       clientX,
+       clientY,
+       button
+     });
+     mapEl.dispatchEvent(tagSim(mev));
+   }
+ }
+*/
+  function applyEvent(evt){
+    switch(evt.type){
+      case 'zoom': map.setZoom(evt.payload.zoom); break;
+      case 'move': map.panTo([evt.payload.lat, evt.payload.lng], { animate: false }); break;
+      case 'pm:drawstart': map.pm.enableDraw(evt.payload.shape, evt.payload.options || {}); break;
+      case 'pm:drawend': map.pm.disableDraw(); break;
+      case 'pm:globaleditmodetoggled': map.pm.setGlobalEditMode(evt.payload.enabled); break;
+      case 'pm:globaldragmodetoggled': map.pm.setGlobalDragMode(evt.payload.enabled); break;
+      case 'pm:removalmodetoggled': map.pm.setRemovalMode(evt.payload.enabled); break;
+      case 'pm:create':
+        // If something was programmatically created, restore it
+        L.geoJSON(evt.payload.geojson, { pmIgnore: false }).eachLayer(l => { l.addTo(map); attachLayerHooks(l); });
+        break;
+      case 'pointermove':
+      case 'pointerdown':
+      case 'pointerup':
+      case 'click':
+      case 'dblclick':
+        dispatchPointer(evt.type, evt.payload);
+        break;
+      default: break;
+    }
+  }
+
+  function tick(){
+    if(!player.playing) return;
+    const total = player.timeline[player.timeline.length - 1].t;
+    const elapsed = (now() - player.startAt) * player.speed;
+    while (player.idx < player.timeline.length && player.timeline[player.idx].t <= elapsed) {
+      const evt = player.timeline[player.idx++];
+      applyEvent(evt);
+    }
+    setProgress(Math.min(1, elapsed / total));
+    if (player.idx >= player.timeline.length) {
+      player.playing = false;
+      setProgress(1);
+      showGhost(false);
+      setInputBlocked(false);
+      showPlayingBadge(false);
+      log({msg:'Playback finished'});
+      if (player.onDone) player.onDone();
+      return;
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // --- UI wiring ---
+  const startRecBtn = document.getElementById('startRec');
+  const stopRecBtn = document.getElementById('stopRec');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const uploadInput = document.getElementById('upload');
+  const speedSel = document.getElementById('speed');
+  const playBtn = document.getElementById('playBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  startRecBtn.addEventListener('click', () => {
+    recorder.start();
+    startRecBtn.disabled = true; stopRecBtn.disabled = false; downloadBtn.disabled = true;
+  });
+  stopRecBtn.addEventListener('click', () => {
+    recorder.stop();
+    startRecBtn.disabled = false; stopRecBtn.disabled = true; downloadBtn.disabled = recorder.events.length === 0;
+    player.load(recorder.events);
+  });
+  downloadBtn.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify({
+      version: 2,
+      createdAt: new Date().toISOString(),
+      map: { center: map.getCenter(), zoom: map.getZoom() },
+      userLabel: 'User1',
+      events: recorder.events
+    }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'leaflet-geoman-session.json'; a.click();
+    URL.revokeObjectURL(url);
+  });
+  uploadInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if(!file) return; const text = await file.text();
+    try{
+      const data = JSON.parse(text);
+      if(!data.events || !Array.isArray(data.events)) throw new Error('Invalid file');
+      if (data.map && data.map.center && typeof data.map.zoom === 'number') {
+        map.setView([data.map.center.lat, data.map.center.lng], data.map.zoom);
+      }
+      // Clear existing layers (except tile layer)
+      map.eachLayer((l) => { if (!(l instanceof L.TileLayer)) map.removeLayer(l); });
+      player.load(data.events);
+      log({msg:'Loaded event file', count: data.events.length});
+      player.speed = parseFloat(speedSel.value);
+      player.play();
+      playBtn.disabled = true; pauseBtn.disabled = false;
+    }catch(err){ alert('Failed to load: ' + err.message); }
+    uploadInput.value = '';
+  });
+  speedSel.addEventListener('change', () => { player.speed = parseFloat(speedSel.value); });
+  playBtn.addEventListener('click', () => { player.speed = parseFloat(speedSel.value); player.play(); playBtn.disabled = true; pauseBtn.disabled = false; });
+  pauseBtn.addEventListener('click', () => { player.pause(); playBtn.disabled = false; pauseBtn.disabled = true; });
+  resetBtn.addEventListener('click', () => { player.reset(); playBtn.disabled = false; pauseBtn.disabled = true; setProgress(0); });
+  blockInputChk.addEventListener('change', () => { if (player.playing) setInputBlocked(blockInputChk.checked); });
+
+  // QoL: enable polygon draw by default after page loads for quick testing
+  //setTimeout(() => { map.pm.enableDraw('Polygon'); }, 500);
+})();
+</script>
+</body>
+</html>
+

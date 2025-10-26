@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Leaflet Building Shadows – v2</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+    #controls { padding: 10px; gap: 10px; display: grid; grid-template-columns: repeat(6, minmax(160px, 1fr)); align-items: center; border-bottom: 1px solid #ddd; }
+    #map { width: 100%; height: 100%; }
+    .small { font-size: 12px; color: #333; }
+    .pill { background:#f6f7f9; padding:6px 10px; border-radius:999px; border:1px solid #e5e7eb; display:inline-flex; gap:6px; align-items:center; }
+    .btn { padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; background:#fff; cursor:pointer; }
+    .btn:active { transform: translateY(1px); }
+    .label { font-size: 12px; color:#555; margin-bottom:4px; display:block; }
+    .stack { display:flex; flex-direction:column; }
+    .row { display:flex; gap:8px; align-items:center; }
+    .grow { flex:1; }
+    input[type="range"] { width: 100%; }
+    @media (max-width: 980px) { #controls { grid-template-columns: 1fr 1fr; grid-auto-rows: auto; } }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="controls">
+      <div class="stack">
+        <label class="label">Load GeoJSON (buildings)</label>
+        <div class="row">
+          <input id="file" type="file" accept=".geojson,.json" class="grow"/>
+          <button id="demoBtn" class="btn">Load Demo</button>
+        </div>
+      </div>
+
+      <div class="stack">
+        <label class="label">Load from WFS</label>
+        <div class="row" style="gap:6px;">
+          <input id="wfsUrl" type="url" class="grow" placeholder="Enter WFS GetFeature URL" value="https://tubvsig-so2sat-vm1.srv.mwn.de/geoserver/ows?service=WFS&version=2.0.0&request=GetFeature&typeNames=global3D:lod1_global"/>
+          <button id="wfsBtn" class="btn">Load WFS</button>
+        </div>
+        <div class="row">
+          <label class="pill small"><input type="checkbox" id="wfsBbox" checked> Limit to current map view (bbox)</label>
+          <label class="pill small"><input type="checkbox" id="wfsAuto"> Auto-refresh on pan/zoom</label>
+        </div>
+        <div class="small">Tip: Server must allow CORS for direct browser access. We request GeoJSON via <code>outputFormat=application/json</code>.</div>
+      </div>
+
+      <div class="stack">
+        <label class="label">Date</label>
+        <input id="date" type="date" />
+      </div>
+
+      <div class="stack">
+        <label class="label">Time of day <span id="timeLabel" class="small"></span></label>
+        <input id="time" type="range" min="0" max="1439" step="1" />
+      </div>
+
+      <div class="stack">
+        <label class="label">Shadow mode</label>
+        <select id="shadowMode">
+          <option value="accurate" selected>Accurate (silhouette union)</option>
+          <option value="fast">Fast (hull approximation)</option>
+        </select>
+      </div>
+
+      <div class="stack">
+        <label class="label">Filters</label>
+        <div class="row">
+          <label class="pill small"><input type="checkbox" id="clipToView" checked> Clip to map view</label>
+          <label class="pill small"><input type="checkbox" id="showSun" checked> Show sun ray</label>
+        </div>
+      </div>
+
+      <div class="stack">
+        <label class="label">Sun</label>
+        <div class="pill small">
+          <span>Azimuth: <b id="az"></b>°</span>
+          <span>Elevation: <b id="el"></b>°</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="map"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+  <script src="https://unpkg.com/suncalc@1.9.0/suncalc.js"></script>
+  <script defer src="app.js"></script>
+</body>
+</html>
+

@@ -12,8 +12,10 @@ Dependencies:
 import argparse
 import sys
 import math
+from typing import Optional
 
 import geopandas as gpd
+import pandas as pd
 from shapely.ops import unary_union, nearest_points
 from shapely.geometry import Polygon, MultiPolygon, LineString
 
@@ -180,7 +182,9 @@ def cut_channels_to_exterior(poly: Polygon, channel_halfwidth_m: float, extend_m
             if extend_m and extend_m > 0:
                 cut_line = extend_segment(cut_line, extend_m)
 
-            cuts.append(cut_line.buffer(channel_halfwidth_m, cap_style=2, join_style=2))
+            # Use square end caps so the buffered strip breaches the hole and shell
+            # boundaries even when the nearest-point cut terminates exactly on them.
+            cuts.append(cut_line.buffer(channel_halfwidth_m, cap_style=3, join_style=2))
 
         if not cuts:
             break
@@ -198,10 +202,50 @@ def cut_channels_to_exterior(poly: Polygon, channel_halfwidth_m: float, extend_m
     return current
 
 
+def load_input_linestrings(paths):
+    frames = []
+    target_crs = None
+
+    for path in paths:
+        gdf = gpd.read_file(path)
+        if gdf.empty:
+            raise ValueError(f"{path}: input has no features.")
+
+        gdf = gdf[gdf.geometry.notna()].copy()
+        gdf = gdf[gdf.geometry.geom_type.isin(["LineString", "MultiLineString"])].copy()
+        if gdf.empty:
+            raise ValueError(f"{path}: no LineString/MultiLineString features found.")
+        if gdf.crs is None:
+            raise ValueError(f"{path}: input has no CRS. Assign one (often EPSG:4326).")
+
+        if target_crs is None:
+            target_crs = gdf.crs
+        elif gdf.crs != target_crs:
+            gdf = gdf.to_crs(target_crs)
+
+        frames.append(gdf[["geometry"]])
+
+    return gpd.GeoDataFrame(
+        pd.concat(frames, ignore_index=True),
+        geometry="geometry",
+        crs=target_crs,
+    )
+
+
+def write_output_geojson(gdf: gpd.GeoDataFrame, output_path: Optional[str]):
+    if output_path:
+        gdf.to_file(output_path, driver="GeoJSON")
+        print(f"AOI written to: {output_path} (hole-less Polygon)", file=sys.stderr)
+        return
+
+    sys.stdout.write(gdf.to_json(drop_id=True))
+    sys.stdout.write("\n")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("input_geojson")
-    ap.add_argument("output_geojson")
+    ap.add_argument("input_geojson", nargs="+", help="One or more input GeoJSON files containing LineString features.")
+    ap.add_argument("--output", help="Output GeoJSON path. Defaults to stdout if omitted.")
     ap.add_argument("--buffer-m", type=float, required=True, help="Corridor half-width around lines, meters.")
     ap.add_argument("--gap-close-m", type=float, default=0.0, help="Morphological closing distance (meters).")
     ap.add_argument("--connect-gaps-m", type=float, default=0.0,
@@ -226,14 +270,7 @@ def main():
     ap.add_argument("--out-crs", default="EPSG:4326")
     args = ap.parse_args()
 
-    gdf = gpd.read_file(args.input_geojson)
-    if gdf.empty:
-        raise ValueError("Input has no features.")
-
-    gdf = gdf[gdf.geometry.notna()].copy()
-    gdf = gdf[gdf.geometry.geom_type.isin(["LineString", "MultiLineString"])].copy()
-    if gdf.empty:
-        raise ValueError("No LineString/MultiLineString features found.")
+    gdf = load_input_linestrings(args.input_geojson)
 
     metric_crs = choose_metric_crs(gdf)
     gdf_m = gdf.to_crs(metric_crs)
@@ -296,8 +333,7 @@ def main():
         )
 
     out = gpd.GeoDataFrame({"name": ["AOI"]}, geometry=[poly], crs=metric_crs).to_crs(args.out_crs)
-    out.to_file(args.output_geojson, driver="GeoJSON")
-    print(f"AOI written to: {args.output_geojson} (hole-less Polygon)")
+    write_output_geojson(out, args.output)
 
 
 if __name__ == "__main__":
@@ -306,5 +342,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-
-
